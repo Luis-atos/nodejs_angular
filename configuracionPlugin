@@ -1,0 +1,115 @@
+instalar plugin nodejs
+Descargar tar.xz de cada version de node
+Unpacking https://nodejs.org/dist/v16.20.0/node-v16.20.0-linux-x64.tar.gz to 
+/var/lib/jenkins/tools/jenkins.plugins.nodejs.tools.NodeJSInstallation/node-v18.16.0-linux-x64 on Jenkins
+
+Esto sale al estar configurado como que lo instale automaticamente en jenkins
+Administrar jenkins - tools -- instalaciones de nodejs
+Nombre
+node-v18.16.0-linux-x64
+Directorio de instalación
+/var/lib/jenkins/tools/jenkins.plugins.nodejs.tools.NodeJSInstallation/node-v18.16.0-linux-x64
+
+Instalar automáticamente
+?desactivado 
+def String build_and_sonarqube_task_mod_controlSentSonar_node18(jobBaseName, LanzarSonar, RutaPackage, envEntorno, envBranchName,proyKey,proyName,NomDesplieguePRE,NomDesplieguePRO,VersionNode) {
+    def pathExec = pwd()
+    def url = ""
+    def sonarProjectFileExists
+    def paramSonar=""
+dir("${pathExec}/source${RutaPackage}/") {
+     sonarProjectFileExists = findFiles(glob: "sonar-project.properties")
+} 
+     echo "estamos... " + sonarProjectFileExists
+	if (sonarProjectFileExists.size()> 0) {
+        try{
+		  echo "\n********** Existe fichero sonar-project.properties **********\n"
+          def props = readProperties file: "./source${RutaPackage}/sonar-project.properties"
+          sonarprojectKey = props['sonar.projectKey']
+          sonarprojectName = props['sonar.projectName'] 
+          if ((sonarprojectKey) && (sonarprojectName)) {
+              proyKey=sonarprojectKey
+          }else{
+            echo "Error sonar-project.properties "
+             currentBuild.result = 'ABORTED'
+             throw new hudson.AbortException('')
+
+          }
+        }catch (err){
+          echo "Error sonar-project.properties"
+          currentBuild.result = 'ABORTED'
+          throw new hudson.AbortException('')
+        }
+ 
+	}else{
+         echo "no obtenido sonar-project.properties "
+         currentBuild.result = 'ABORTED'
+         throw new hudson.AbortException('')
+    }
+
+        // Establecer variables de entorno HTTP_PROXY y HTTPS_PROXY
+        //sh "/var/lib/jenkins/env_set.sh"
+        
+nodejs(nodeJSInstallationName: VersionNode) {
+        sh """
+           npm set strict-ssl false 
+           npm config list
+           npm --prefix source${RutaPackage} install -dd
+        """
+        
+        //def paramSonar=""
+
+        if ((envEntorno=="Desarrollo")){
+            echo 'Build para Desarrollo, entorno: ' + envEntorno
+            sh "npm --prefix source${RutaPackage} run-script build"
+            paramSonar="-develop"
+             
+        }else if ((envBranchName.matches("feature(.*)")) && (envEntorno=="Validacion")){
+            echo 'Build para Validación, entorno: ' + envEntorno
+            sh "npm --prefix source${RutaPackage} run-script buildval"
+            paramSonar="-develop"
+        }else if(envEntorno == 'Validacion'){
+            echo 'Build para Validación, entorno: ' + envEntorno
+            sh "npm --prefix source${RutaPackage} run-script buildval"
+            
+        }else if((envEntorno == 'Pre-produccion') || (envEntorno == 'Hotfix')){
+            echo 'Build PRE y almacenamos el artefacto'
+            sh "npm --prefix source${RutaPackage} run-script buildprepro"
+            zip zipFile: "source${RutaPackage}/target/${NomDesplieguePRE}", archive: false, dir: "source${RutaPackage}/dist/"
+            
+            echo 'Build PRO y almacenamos el artefacto'
+            sh "npm --prefix source${RutaPackage} run-script buildprod"
+            zip zipFile: "source${RutaPackage}/target/${NomDesplieguePRO}", archive: false, dir: "source${RutaPackage}/dist/"
+            
+            echo 'Build para Validación, entorno: ' + envEntorno
+            sh "npm --prefix source${RutaPackage} run-script buildval"
+        }
+   
+        withSonarQubeEnv('Sonar_9.9LTS') {
+		    if(LanzarSonar=="1"){
+    			    echo "Build Con SONAR:"
+    			     if (!jobBaseName.matches("REPEMI(.*)")){
+    			        try{
+                        sh """
+        					export FIREFOX_BIN=/usr/bin/firefox
+        					export NODE_OPTIONS=--max_old_space_size=4096
+        				    npm --prefix source${RutaPackage} test
+        				"""
+                        
+
+    			        }catch (err){
+    			            echo "Test no finalizado correctamente"
+    			        }
+    			    }
+    			    
+                     def output = sh(script: "export JAVA_HOME='/usr/lib/jvm/java-17-openjdk-17.0.7.0.7-1.portable.jdk.el.x86_64/'; npm  --prefix source${RutaPackage} run sonar -- -Dsonar.projectKey=${proyKey}${paramSonar} -Dsonar.projectName=${proyName}${paramSonar} -Dsonar.login=jenkinstask -Dsonar.password=zV5f583nPW", returnStdout: true)
+    				      url = output.find(~"https://sonar.servdev.mdef.es/api/ce/task\\?id=[\\w-]*")
+                    //url = output.find(~"http://divindesonar.mdef.es:9000/api/ce/task\\?id=[\\w-]*")
+                    
+    			}
+			
+		}
+}
+		return url
+}
+
